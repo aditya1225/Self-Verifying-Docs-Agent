@@ -1,0 +1,21 @@
+# Core runtime
+pydantic>=2.7
+python-dotenv>=1.0
+anthropic>=0.40
+pypdf>=4.2
+rank-bm25>=0.2.2
+numpy>=1.26
+typer>=0.12
+rich>=13.7
+
+# Vector + re-rank backend (local, CPU). Optional: the pipeline degrades to the
+# deterministic hash embedder and fusion-score re-ranker if these are absent.
+torch>=2.2
+sentence-transformers>=3.0
+
+# MCP server (Ch. 10)
+mcp[cli]>=1.2
+
+# Dev / CI
+pytest>=8.2
+pytest-asyncio>=0.23

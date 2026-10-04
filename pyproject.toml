@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "svda"
+version = "0.1.0"
+description = "Self-Verifying Docs Agent - agentic RAG over Designing Data-Intensive Applications"
+requires-python = ">=3.11"
+dynamic = ["dependencies"]
+
+[project.scripts]
+svda = "svda.cli:app"
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+filterwarnings = ["ignore::DeprecationWarning"]

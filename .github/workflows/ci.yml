@@ -1,0 +1,111 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  # Always runs, on every PR, with no secrets: the whole agent graph exercised
+  # against the deterministic stub LLM and the hash embedder.
+  offline-suite:
+    name: Self-verification (offline)
+    runs-on: ubuntu-latest
+    env:
+      SVDA_FORCE_STUB_LLM: "1"
+      SVDA_EMBEDDING_BACKEND: hash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install (no torch - the offline suite does not need it)
+        run: |
+          python -m pip install --upgrade pip
+          pip install pydantic python-dotenv anthropic pypdf rank-bm25 numpy \
+                      typer rich pytest pytest-asyncio
+          pip install -e . --no-deps
+
+      - name: Run the suite
+        run: pytest -q
+
+      - name: Golden set is well-formed
+        run: python -c "from svda.eval.golden import load_golden, summarize; print(summarize(load_golden()))"
+
+  # Only runs where a key is configured. This is the gate that can actually
+  # catch a quality regression, because it uses the real models.
+  quality-gate:
+    name: Evaluation + regression gate
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'pull_request' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Check for a key
+        id: key
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -n "$ANTHROPIC_API_KEY" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::ANTHROPIC_API_KEY not configured - skipping the keyed evaluation."
+          fi
+
+      - name: Install
+        if: steps.key.outputs.present == 'true'
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -e .
+
+      - name: Restore the corpus index
+        if: steps.key.outputs.present == 'true'
+        uses: actions/cache@v4
+        with:
+          path: index
+          key: svda-index-${{ hashFiles('src/svda/ingest/**', 'src/svda/index/**') }}
+
+      - name: Ingest if the index is cold
+        if: steps.key.outputs.present == 'true'
+        env:
+          SVDA_CORPUS_PDF: ${{ secrets.SVDA_CORPUS_PDF_URL }}
+        run: |
+          if [ ! -f index/chunks.jsonl ]; then
+            if [ -z "$SVDA_CORPUS_PDF" ]; then
+              echo "::warning::No corpus available to ingest; skipping."
+              exit 0
+            fi
+            curl -sSL "$SVDA_CORPUS_PDF" -o corpus.pdf
+            svda ingest --pdf corpus.pdf
+          fi
+
+      - name: Evaluate
+        if: steps.key.outputs.present == 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: svda eval --llm-judge --concurrency 6
+
+      - name: Gate on regression
+        if: steps.key.outputs.present == 'true'
+        run: svda gate
+
+      - name: Publish the ablation table to the job summary
+        if: steps.key.outputs.present == 'true' && always()
+        run: cat runs/ablation.md >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: steps.key.outputs.present == 'true' && always()
+        with:
+          name: evaluation
+          path: |
+            runs/latest.json
+            runs/ablation.md
+            runs/dashboard.html
